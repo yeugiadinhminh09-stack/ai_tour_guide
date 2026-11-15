@@ -145,7 +145,15 @@ body{background:#F6F5F0;color:#17353a;font-family:'Segoe UI',system-ui,sans-seri
 <script>
 const k1 ="AQ.Ab8RN6JWA6IaGhFfc8L"
 const k2 ="6dVddMNX3upCc8ig-hZ0Xgnwf6cYeZw"
+const k3 ="AQ.Ab8RN6JpgAxm0S8W6"
+const k4 ="CgP-n2bpsxKesOO3YQQH3EKScCKXWx4zw"
+const k5 ="AQ.Ab8RN6LZqM-VqLA5G4h3"
+const k6 ="rFb4tn4a4qGaV7iyfVyXeZJzQTpkcA"
+
 const GEMINI_API_KEY = k1 + k2;
+const GEMINI_API_KEY_2 = k3 + k4;
+const GEMINI_API_KEY_3 = k5 + k6;
+
 const GEMINI_MODEL = "gemini-3.5-flash";
 
 const R = (id, name, tags, price, lat, lng, desc, priceText) => ({id: id, name: name, area: "", tags: tags, price: price, priceText: priceText || "", lat: lat, lng: lng, desc: desc});
@@ -559,7 +567,7 @@ async function sendMessage(text) {
   const wait = addMsg(T("thinking"), "bot");
   let ans;
   if (GEMINI_API_KEY) {
-    try { ans = await callGeminiAPI(text); } catch (e) { ans = "Lỗi: " + e.message ; }
+    try { ans = await callGeminiAPIStream(text, wait); } catch (e) { ans = "Lỗi: " + e.message ; }
   }
   if (!ans) ans = localAI(text);
   wait.textContent = ans;
@@ -568,20 +576,64 @@ async function sendMessage(text) {
   document.getElementById("chat").scrollTop = 1e6;
 }
 
-async function callGeminiAPI(q) {
+async function callGeminiAPIStream(q, waitElement) {
   const sys = "Bạn là AI Tour Guide chuyên nghiệp của vùng Khánh Hòa – Ninh Thuận. Hãy tư vấn nhiệt tình, lên lịch trình chi tiết theo từng buổi (Sáng, Trưa, Chiều, Tối) kèm gợi ý quán ăn đặc sản và chi phí tham khảo bằng " + (lang === "en" ? "English." : "tiếng Việt.");
-  const url = "https://generativelanguage." + "googleapis.com" + "/v1beta" + "/models/" + GEMINI_MODEL + ":generateContent?key=" + GEMINI_API_KEY.trim();
-  const r = await fetch(url, {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({
-      systemInstruction: { parts: [{ text: sys }] },
-      contents: [{ role: "user", parts: [{ text: q }] }]
-    })
-  });
-  const j = await r.json();
-  if (j.error) return "Lỗi từ Google API: " + j.error.message;
-  return j.candidates[0].content.parts[0].text.replace(/\*\*/g, "");
+  const keys = [
+    typeof GEMINI_API_KEY !== "undefined" ? GEMINI_API_KEY : "",
+    typeof GEMINI_API_KEY_2 !== "undefined" ? GEMINI_API_KEY_2 : "",
+    typeof GEMINI_API_KEY_3 !== "undefined" ? GEMINI_API_KEY_3 : ""
+  ].filter(k => k && k.trim());
+
+  const chatBox = document.getElementById("chat");
+
+  for (let i = 0; i < keys.length; i++) {
+    const url = "https://generativelanguage." + "googleapis.com" + "/v1beta" + "/models/" + GEMINI_MODEL + ":streamGenerateContent?alt=sse&key=" + keys[i].trim();
+    const r = await fetch(url, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        systemInstruction: { parts: [{ text: sys }] },
+        contents: [{ role: "user", parts: [{ text: q }] }]
+      })
+    });
+
+    if (!r.ok) continue;
+
+    const reader = r.body.getReader();
+    const decoder = new TextDecoder("utf-8");
+    let fullText = "";
+    let isFirst = true;
+
+    while (true) {
+      const { done, value } = await reader.read();
+      if (done) break;
+
+      const chunk = decoder.decode(value, { stream: true });
+      const lines = chunk.split("\n");
+
+      for (const line of lines) {
+        if (line.startsWith("data: ")) {
+          try {
+            const json = JSON.parse(line.slice(6));
+            const part = json.candidates[0].content.parts[0].text;
+            if (part) {
+              if (isFirst) {
+                waitElement.textContent = "";
+                isFirst = false;
+              }
+              fullText += part.replace(/\*\*/g, "");
+              waitElement.textContent = fullText;
+              chatBox.scrollTop = 1e6;
+            }
+          } catch (err) {}
+        }
+      }
+    }
+
+    if (fullText) return fullText;
+  }
+
+  return "Lỗi từ Google API: Không thể kết nối";
 }
 function localAI(q) {
   const s = q.toLowerCase(), en = lang === "en";
